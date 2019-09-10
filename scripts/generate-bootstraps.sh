@@ -15,6 +15,7 @@ TERMUX_ARCHITECTURES=("aarch64" "arm" "i686" "x86_64")
 
 # Can be changed by using '--repository' option.
 REPO_BASE_URL="https://dl.bintray.com/termux/termux-packages-24"
+REPO_SIDECAR="/home/dick/termux-packages/debs"
 
 # Can be changed by using '--prefix' option.
 TERMUX_PREFIX="/data/data/com.termux/files/usr"
@@ -80,19 +81,24 @@ pull_package() {
 	mkdir -p "$package_tmpdir"
 
 	local package_url
-	package_url="$REPO_BASE_URL/$(echo "${PACKAGE_METADATA[${package_name}]}" | grep -i "^Filename:" | awk '{ print $2 }')"
-	if [ "${package_url}" = "$REPO_BASE_URL" ] || [ "${package_url}" = "${REPO_BASE_URL}/" ]; then
+	local package_dependencies
+        local package_subdir=$(echo "${PACKAGE_METADATA[${package_name}]}" | grep -i "^Filename:" | awk '{ print $2 }')
+        if [ -z "$package_subdir" ]; then
+            local sidecar=$(ls -1 ${REPO_SIDECAR}/${package_name}_*${package_arch}.deb | tail -1)
+            if [ -z "$sidecar" ]; then
 		echo "[!] Failed to determine URL for package '$package_name'."
 		exit 1
-	fi
-
-	local package_dependencies
-	package_dependencies=$(
-		while read -r token; do
+            fi
+            package_url="file:///${sidecar}"
+	    package_dependencies=$(while read -r token; do
 			echo "$token" | cut -d'|' -f1 | sed -E 's@\(.*\)@@'
-		done < <(echo "${PACKAGE_METADATA[${package_name}]}" | grep -i "^Depends:" | sed -E 's@^[Dd]epends:@@' | tr ',' '\n')
-	)
-
+		done < <(dpkg --ctrl-tarfile ${sidecar} | tar xOf - | grep -i "^Depends:" | sed -E 's@^[Dd]epends:@@' | tr ',' '\n'))
+        else
+            package_url="$REPO_BASE_URL/${package_subdir}"
+            package_dependencies=$(while read -r token; do
+                echo "$token" | cut -d'|' -f1 | sed -E 's@\(.*\)@@'
+            done < <(echo "${PACKAGE_METADATA[${package_name}]}" | grep -i "^Depends:" | sed -E 's@^[Dd]epends:@@' | tr ',' '\n'))
+        fi
 	# Recursively handle dependencies.
 	if [ -n "$package_dependencies" ]; then
 		local dep
@@ -276,7 +282,7 @@ done
 
 for package_arch in "${TERMUX_ARCHITECTURES[@]}"; do
 	BOOTSTRAP_ROOTFS="$BOOTSTRAP_TMPDIR/rootfs-${package_arch}"
-	BOOTSTRAP_PKGDIR="$BOOTSTRAP_TMPDIR/packages-${package_arch}"
+ 	BOOTSTRAP_PKGDIR="$BOOTSTRAP_TMPDIR/packages-${package_arch}"
 
 	# Create initial directories for $TERMUX_PREFIX
 	mkdir -p "${BOOTSTRAP_ROOTFS}/${TERMUX_PREFIX}/etc/apt/apt.conf.d"
